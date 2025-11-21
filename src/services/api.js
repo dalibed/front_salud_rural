@@ -1,0 +1,351 @@
+import axios from 'axios';
+
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+
+// Crear instancia de axios
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// Interceptor para agregar el token de autenticación
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('access_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Interceptor para manejar errores y refrescar tokens
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    // Si el error es 401 y no hemos intentado refrescar el token
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        const refreshToken = localStorage.getItem('refresh_token');
+        if (refreshToken) {
+          const response = await axios.post(`${API_BASE_URL}/auth/refresh/`, {
+            refresh: refreshToken,
+          });
+
+          const { access } = response.data;
+          localStorage.setItem('access_token', access);
+          originalRequest.headers.Authorization = `Bearer ${access}`;
+
+          return api(originalRequest);
+        }
+      } catch (refreshError) {
+        // Si falla el refresh, limpiar tokens y redirigir al login
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        // Solo redirigir si no estamos ya en la página de login
+        if (!window.location.pathname.includes('/login')) {
+          window.location.href = '/login';
+        }
+        return Promise.reject(refreshError);
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
+
+// Servicios de autenticación
+export const authService = {
+  login: async (correo, contrasena) => {
+    const response = await api.post('/auth/login/', { correo, contrasena });
+    return response.data;
+  },
+
+  logout: async () => {
+    try {
+      const refreshToken = localStorage.getItem('refresh_token');
+      if (refreshToken) {
+        await api.post('/auth/logout/', {
+          refresh: refreshToken,
+        });
+      }
+    } catch (error) {
+      console.error('Error al hacer logout:', error);
+      // Continuar limpiando tokens incluso si hay error
+    } finally {
+      localStorage.removeItem('access_token');
+      localStorage.removeItem('refresh_token');
+    }
+  },
+
+  getMe: async () => {
+    const response = await api.get('/auth/me/');
+    return response.data;
+  },
+
+  changePassword: async (oldPassword, newPassword) => {
+    const response = await api.post('/auth/change-password/', {
+      old_password: oldPassword,
+      new_password: newPassword,
+    });
+    return response.data;
+  },
+};
+
+// Servicios de pacientes
+export const pacienteService = {
+  getAll: async () => {
+    const response = await api.get('/pacientes/');
+    return response.data;
+  },
+
+  getById: async (id) => {
+    const response = await api.get(`/pacientes/${id}/`);
+    return response.data;
+  },
+
+  update: async (id, data) => {
+    const response = await api.put(`/pacientes/${id}/`, data);
+    return response.data;
+  },
+};
+
+// Servicios de médicos
+export const medicoService = {
+  getAll: async () => {
+    const response = await api.get('/medicos/');
+    return response.data;
+  },
+
+  getById: async (id) => {
+    const response = await api.get(`/medicos/${id}/`);
+    return response.data;
+  },
+
+  getByEstado: async (estado) => {
+    const response = await api.get(`/medicos/listar-estado/${estado}/`);
+    return response.data;
+  },
+
+  getApproved: async () => {
+    const response = await api.get('/medicos/listar-estado/Aprobado/');
+    return response.data;
+  },
+};
+
+// Servicios de citas
+export const citaService = {
+  // Nota: No hay un endpoint 'list()' genérico en el backend
+  // Usar getByPaciente o getByMedico según el rol del usuario
+  
+  create: async (data) => {
+    const response = await api.post('/citas/', data);
+    return response.data;
+  },
+
+  cancelar: async (id, data) => {
+    const response = await api.put(`/citas/cancelar/${id}/`, data);
+    return response.data;
+  },
+
+  completar: async (id, data) => {
+    const response = await api.put(`/citas/completar/${id}/`, data);
+    return response.data;
+  },
+
+  getByPaciente: async (pacienteId) => {
+    const response = await api.get(`/citas/paciente/${pacienteId}/`);
+    // Asegurar que siempre devuelve un array
+    return Array.isArray(response.data) ? response.data : [];
+  },
+
+  getByMedico: async (medicoId) => {
+    const response = await api.get(`/citas/medico/${medicoId}/`);
+    // Asegurar que siempre devuelve un array
+    return Array.isArray(response.data) ? response.data : [];
+  },
+};
+
+// Servicios de agenda
+export const agendaService = {
+  create: async (data) => {
+    const response = await api.post('/agenda/', data);
+    return response.data;
+  },
+
+  getByMedico: async (medicoUsuarioId) => {
+    const response = await api.get(`/agenda/${medicoUsuarioId}/`);
+    return response.data;
+  },
+
+  getDisponiblesByMedico: async (medicoUsuarioId) => {
+    const response = await api.get(`/agenda/disponible/${medicoUsuarioId}/`);
+    return response.data;
+  },
+
+  toggle: async (agendaId, data) => {
+    const response = await api.put(`/agenda/toggle/${agendaId}/`, data);
+    return response.data;
+  },
+};
+
+export const usuarioService = {
+  create: async (data) => {
+    const response = await api.post('/usuarios/', data);
+    return response.data;
+  },
+
+  update: async (id, data) => {
+    const response = await api.put(`/usuarios/${id}/`, data);
+    return response.data;
+  },
+};
+
+export const diccionarioService = {
+  list: async () => {
+    const response = await api.get('/diccionario/');
+    return response.data;
+  },
+
+  search: async (query) => {
+    const response = await api.get('/diccionario/buscar/', {
+      params: { q: query },
+    });
+    return response.data;
+  },
+
+  getById: async (id) => {
+    const response = await api.get(`/diccionario/${id}/`);
+    return response.data;
+  },
+};
+
+export const especialidadService = {
+  list: async () => {
+    const response = await api.get('/especialidades/');
+    return response.data;
+  },
+
+  listByMedico: async (medicoUsuarioId) => {
+    const response = await api.get(`/especialidades/medico/${medicoUsuarioId}/`);
+    return response.data;
+  },
+
+  create: async (data) => {
+    const response = await api.post('/especialidades/', data);
+    return response.data;
+  },
+
+  assignToMedico: async (data) => {
+    const response = await api.post('/especialidades/asignar/', data);
+    return response.data;
+  },
+};
+
+export const tipoDocumentoService = {
+  list: async () => {
+    const response = await api.get('/tipodocumento/');
+    return response.data;
+  },
+
+  create: async (data) => {
+    const response = await api.post('/tipodocumento/', data);
+    return response.data;
+  },
+};
+
+export const historiaClinicaService = {
+  getHistoriaPaciente: async (usuarioPacienteId) => {
+    const response = await api.get(`/historia/paciente/${usuarioPacienteId}/`);
+    return response.data;
+  },
+
+  actualizarAntecedentes: async (medicoId, pacienteId, antecedentes) => {
+    const response = await api.put(
+      `/historia/antecedentes/${medicoId}/${pacienteId}/`,
+      { antecedentes }
+    );
+    return response.data;
+  },
+
+  getHistoriaCompleta: async (medicoId, pacienteId) => {
+    const response = await api.get(`/historia/completa/${medicoId}/${pacienteId}/`);
+    return response.data;
+  },
+};
+
+export const historiaEntradaService = {
+  listByPaciente: async (usuarioPacienteId) => {
+    const response = await api.get(`/historia/entrada/paciente/${usuarioPacienteId}/`);
+    return response.data;
+  },
+
+  listByMedico: async (usuarioMedicoId) => {
+    const response = await api.get(`/historia/entrada/medico/${usuarioMedicoId}/`);
+    return response.data;
+  },
+
+  create: async (data) => {
+    const response = await api.post('/historia-entradas/', data);
+    return response.data;
+  },
+
+  update: async (id, data) => {
+    const response = await api.put(`/historia-entradas/${id}/`, data);
+    return response.data;
+  },
+};
+
+export const documentoService = {
+  listByMedico: async (medicoUsuarioId) => {
+    const response = await api.get('/documentos/', {
+      params: { id_usuario_medico: medicoUsuarioId },
+    });
+    return response.data;
+  },
+
+  upload: async (data) => {
+    const response = await api.post('/documentos/', data);
+    return response.data;
+  },
+
+  validate: async (idDocumento, data) => {
+    const response = await api.post(`/documentos/${idDocumento}/validar/`, data);
+    return response.data;
+  },
+};
+
+export const notificacionService = {
+  listPaciente: async (usuarioPacienteId) => {
+    const response = await api.get(`/notificaciones/paciente/${usuarioPacienteId}/`);
+    return response.data;
+  },
+
+  listMedico: async (usuarioMedicoId) => {
+    const response = await api.get(`/notificaciones/medico/${usuarioMedicoId}/`);
+    return response.data;
+  },
+};
+
+export const videollamadaService = {
+  crear: async (citaId, data) => {
+    const response = await api.post(`/videollamada/${citaId}/`, data);
+    return response.data;
+  },
+
+  getByCita: async (citaId) => {
+    const response = await api.get(`/videollamada/${citaId}/`);
+    return response.data;
+  },
+};
+
+export default api;
